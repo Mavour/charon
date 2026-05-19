@@ -209,31 +209,28 @@ export function initDb() {
   ensureColumn('dry_run_positions', 'partial_tp_done', 'INTEGER DEFAULT 0');
   ensureColumn('decision_logs', 'strategy_id', 'TEXT');
 
-  const defaults = {
-    // ── Ponyin-Optimized Defaults ──────────────────────────────────
-    // P0 Bundle Token, P1 Global Fees, P4 Dex Paid/Ads/Boost
-    // A2 First 1K, A3 Wallet Ping, A4 Money Management, A7 Scalping
+  // Clear stale settings on every start, then re-seed.
+  db.exec('DELETE FROM settings');
+  const insert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+  const sett = {
     agent_enabled: 'true',
     trading_mode: process.env.TRADING_MODE || 'dry_run',
     llm_candidate_pick_count: process.env.LLM_CANDIDATE_PICK_COUNT || '10',
     llm_candidate_max_age_ms: process.env.LLM_CANDIDATE_MAX_AGE_MS || String(10 * 60 * 1000),
-    llm_min_confidence: '70',
-    max_open_positions: process.env.MAX_OPEN_POSITIONS || '4',
-    dry_run_buy_sol: '0.05',
-    default_tp_percent: '40',
-    default_sl_percent: '-20',
+    llm_min_confidence: '75',
+    max_open_positions: process.env.MAX_OPEN_POSITIONS || '3',
+    dry_run_buy_sol: '0.3',
+    default_tp_percent: '150',
+    default_sl_percent: '-40',
     default_trailing_enabled: 'true',
-    default_trailing_percent: '15',
+    default_trailing_percent: '35',
     min_fee_claim_sol: process.env.MIN_FEE_CLAIM_SOL || '2',
     min_mcap_usd: '10000',
     max_mcap_usd: '150000',
     min_gmgn_total_fee_sol: '10',
-    min_fee_unique_recipients: '0',
-    min_fee_claims_30m: '0',
-    min_graduated_volume_usd: '0',
+    min_holders: '0',
     max_top20_holder_percent: '45',
     min_saved_wallet_holders: '0',
-    min_smart_wallet_count: '0',
     gmgn_request_delay_ms: process.env.GMGN_REQUEST_DELAY_MS || '2500',
     gmgn_max_retries: process.env.GMGN_MAX_RETRIES || '2',
     trending_enabled: process.env.TRENDING_ENABLED || 'true',
@@ -243,33 +240,31 @@ export function initDb() {
     trending_limit: process.env.TRENDING_LIMIT || '100',
     trending_order_by: process.env.TRENDING_ORDER_BY || 'volume',
     trending_min_volume_usd: process.env.TRENDING_MIN_VOLUME_USD || '5000',
-    trending_min_swaps: process.env.TRENDING_MIN_SWAPS || '10',
+    trending_min_swaps: process.env.TRENDING_MIN_SWAPS || '50',
     trending_max_rug_ratio: process.env.TRENDING_MAX_RUG_RATIO || '0.15',
     trending_max_bundler_rate: process.env.TRENDING_MAX_BUNDLER_RATE || '0.2',
   };
-  const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
-  for (const [key, value] of Object.entries(defaults)) insert.run(key, value);
+  for (const [key, value] of Object.entries(sett)) insert.run(key, value);
 
-  // Seed default strategies
-  const stratInsert = db.prepare('INSERT OR IGNORE INTO strategies (id, name, enabled, config_json, created_at_ms) VALUES (?, ?, ?, ?, ?)');
+  // Seed default strategies from code on every start.
+  db.exec('DELETE FROM strategies');
+  const stratInsert = db.prepare('INSERT INTO strategies (id, name, enabled, config_json, created_at_ms) VALUES (?, ?, ?, ?, ?)');
   const ts = Date.now();
-  const sniperStrategy = {
+
+  // SNIPER
+  // Fee-claim based entry. Smart wallet confidence boost. Strict screening.
+  stratInsert.run('sniper', 'Sniper', 1, JSON.stringify({
     entry_mode: 'immediate',
     min_source_count: 2,
     require_fee_claim: true,
     token_age_max_ms: 21600000,
     min_mcap_usd: 10000,
     max_mcap_usd: 150000,
-    min_fee_claim_sol: 2,
+    min_fee_claim_sol: 2.0,
     min_gmgn_total_fee_sol: 10,
-    min_fee_unique_recipients: 0,
-    min_fee_claims_30m: 0,
-    reject_concentrated_fee_recipients: true,
     min_holders: 0,
     max_top20_holder_percent: 45,
     min_saved_wallet_holders: 0,
-    min_smart_wallet_count: 0,
-    require_smart_wallet_after_dip: false,
     max_ath_distance_pct: 0,
     min_graduated_volume_usd: 0,
     trending_min_volume_usd: 5000,
@@ -286,133 +281,112 @@ export function initDb() {
     partial_tp_at_percent: 100,
     partial_tp_sell_percent: 40,
     max_hold_ms: 7200000,
-    volume_drop_exit_percent: 80,
     use_llm: true,
     llm_min_confidence: 75,
-  };
+  }), ts);
 
-  // ── SNIPER (Ponyin: P0 Bundle + P1 Global Fees + A7 Instant Scalping) ──
-  // Early entry via fee-claim. Bundle detection, volume auth, smart wallet signals.
-  stratInsert.run('sniper', 'Sniper', 1, JSON.stringify(sniperStrategy), ts);
-  const sniperRow = db.prepare('SELECT name, config_json FROM strategies WHERE id = ?').get('sniper');
-  if (sniperRow?.name === 'Sniper' || sniperRow?.name === 'Strict Lowcap') {
-    const config = JSON.parse(sniperRow.config_json);
-    const looksLikeOldDefault = config.min_mcap_usd === 7000
-      && config.max_mcap_usd === 200000
-      && config.tp_percent === 50
-      && config.sl_percent === -25
-      && config.llm_min_confidence === 55;
-    const looksLikeStrictDraft = config.min_mcap_usd === 10000
-      && config.max_mcap_usd === 50000
-      && config.tp_percent === 200
-      && config.sl_percent === -35;
-    if (looksLikeOldDefault || looksLikeStrictDraft) {
-      db.prepare('UPDATE strategies SET name = ?, config_json = ? WHERE id = ?')
-        .run('Sniper', JSON.stringify(sniperStrategy), 'sniper');
-    }
-  }
-
-  // ── DIP BUY (Ponyin: P5 3 Conf Candle + Bonus Day Phase + A4 Money Mgmt) ──
-  // Valid dip entry via ATH-distance. Partial TP, 7d max hold, smart wallet check.
+  // DIP BUY
+  // Buy after ATH drawdown. Partial TP, max hold 2 hours.
   stratInsert.run('dip_buy', 'Dip Buy', 0, JSON.stringify({
     entry_mode: 'wait_for_dip',
     min_source_count: 1,
     require_fee_claim: false,
-    token_age_max_ms: 86400000,
-    min_mcap_usd: 25000,
-    max_mcap_usd: 500000,
+    token_age_max_ms: 21600000,
+    min_mcap_usd: 10000,
+    max_mcap_usd: 100000,
     min_fee_claim_sol: 0,
-    min_gmgn_total_fee_sol: 2,
-    min_holders: 50,
-    max_top20_holder_percent: 80,
-    min_saved_wallet_holders: 1,
-    max_ath_distance_pct: -50,
+    min_gmgn_total_fee_sol: 5,
+    min_holders: 100,
+    max_top20_holder_percent: 45,
+    min_saved_wallet_holders: 0,
+    max_ath_distance_pct: -25,
     min_graduated_volume_usd: 0,
     trending_min_volume_usd: 2000,
     trending_min_swaps: 20,
-    trending_max_rug_ratio: 0.2,
-    trending_max_bundler_rate: 0.25,
-    position_size_sol: 0.05,
-    max_open_positions: 3,
-    tp_percent: 35,
-    sl_percent: -18,
+    trending_max_rug_ratio: 0.15,
+    trending_max_bundler_rate: 0.2,
+    position_size_sol: 0.2,
+    max_open_positions: 2,
+    tp_percent: 100,
+    sl_percent: -35,
     trailing_enabled: true,
-    trailing_percent: 15,
+    trailing_percent: 30,
     partial_tp: true,
-    partial_tp_at_percent: 50,
+    partial_tp_at_percent: 60,
     partial_tp_sell_percent: 40,
-    max_hold_ms: 604800000,
+    max_hold_ms: 7200000,
     use_llm: true,
-    llm_min_confidence: 60,
+    llm_min_confidence: 70,
   }), ts);
 
-  // ── SMART MONEY (Ponyin: P7 Holder + P8 MC Tier + A3 Wallet Ping) ──
-  // Established tokens with clean distribution. Smart wallet signals. Partial scale-out.
+  // SMART MONEY
+  // Follow smart wallet trails with clean holder distribution.
   stratInsert.run('smart_money', 'Smart Money', 0, JSON.stringify({
     entry_mode: 'immediate',
     min_source_count: 2,
     require_fee_claim: false,
-    token_age_max_ms: 86400000,
-    min_mcap_usd: 10000,
-    max_mcap_usd: 1000000,
+    token_age_max_ms: 43200000,
+    min_mcap_usd: 15000,
+    max_mcap_usd: 300000,
     min_fee_claim_sol: 0,
     min_gmgn_total_fee_sol: 0,
-    min_holders: 500,
+    min_holders: 300,
     max_top20_holder_percent: 35,
-    min_saved_wallet_holders: 2,
+    min_saved_wallet_holders: 0,
     max_ath_distance_pct: 0,
     min_graduated_volume_usd: 0,
-    trending_min_volume_usd: 3000,
+    trending_min_volume_usd: 5000,
     trending_min_swaps: 50,
-    trending_max_rug_ratio: 0.15,
-    trending_max_bundler_rate: 0.2,
-    position_size_sol: 0.1,
+    trending_max_rug_ratio: 0.1,
+    trending_max_bundler_rate: 0.15,
+    position_size_sol: 0.2,
     max_open_positions: 3,
-    tp_percent: 100,
-    sl_percent: -25,
+    tp_percent: 200,
+    sl_percent: -30,
     trailing_enabled: true,
-    trailing_percent: 25,
+    trailing_percent: 30,
     partial_tp: true,
-    partial_tp_at_percent: 75,
-    partial_tp_sell_percent: 40,
-    max_hold_ms: 0,
+    partial_tp_at_percent: 100,
+    partial_tp_sell_percent: 50,
+    max_hold_ms: 14400000,
     use_llm: true,
-    llm_min_confidence: 75,
+    llm_min_confidence: 80,
   }), ts);
 
-  // ── DEGEN (Ponyin: A2 First 1K + A7 Instant Scalping) ──
-  // Rule-based (no LLM). Small positions, tight stops, minimal safety gates.
+  // DEGEN
+  // Rule-based, high-risk testing mode for new signals.
   stratInsert.run('degen', 'Degen', 0, JSON.stringify({
     entry_mode: 'immediate',
     min_source_count: 1,
     require_fee_claim: false,
     token_age_max_ms: 3600000,
     min_mcap_usd: 5000,
-    max_mcap_usd: 100000,
+    max_mcap_usd: 50000,
     min_fee_claim_sol: 0,
     min_gmgn_total_fee_sol: 0,
     min_holders: 0,
-    max_top20_holder_percent: 90,
+    max_top20_holder_percent: 80,
     min_saved_wallet_holders: 0,
     max_ath_distance_pct: 0,
     min_graduated_volume_usd: 0,
     trending_min_volume_usd: 0,
     trending_min_swaps: 0,
-    trending_max_rug_ratio: 0.35,
-    trending_max_bundler_rate: 0.4,
-    position_size_sol: 0.03,
-    max_open_positions: 3,
-    tp_percent: 25,
-    sl_percent: -10,
+    trending_max_rug_ratio: 0.3,
+    trending_max_bundler_rate: 0.35,
+    position_size_sol: 0.05,
+    max_open_positions: 2,
+    tp_percent: 50,
+    sl_percent: -20,
     trailing_enabled: true,
-    trailing_percent: 10,
+    trailing_percent: 15,
     partial_tp: false,
     partial_tp_at_percent: 0,
     partial_tp_sell_percent: 0,
-    max_hold_ms: 0,
+    max_hold_ms: 3600000,
     use_llm: false,
     llm_min_confidence: 0,
   }), ts);
+
 }
 
 export function ensureColumn(table, column, ddl) {

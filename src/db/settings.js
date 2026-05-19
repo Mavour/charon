@@ -87,8 +87,5 @@ function defaultStrategy() {
     tp_percent: 150, sl_percent: -40, trailing_enabled: true, trailing_percent: 35,
     partial_tp: true, partial_tp_at_percent: 100, partial_tp_sell_percent: 40,
     max_hold_ms: 7200000, use_llm: true, llm_min_confidence: 75,
-    min_fee_unique_recipients: 0, min_fee_claims_30m: 0,
-    reject_concentrated_fee_recipients: true, min_smart_wallet_count: 0,
-    require_smart_wallet_after_dip: false, volume_drop_exit_percent: 80,
   };
 }
