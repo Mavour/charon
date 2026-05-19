@@ -41,6 +41,7 @@ export function compactCandidateForLlm(row) {
     token: c.token,
     metrics: c.metrics,
     feeClaim: c.feeClaim,
+    feeDistribution: c.feeDistribution,
     trending: c.trending,
     graduation: c.graduation,
     holders: c.holders,
@@ -60,7 +61,9 @@ export function compactCandidateForLlm(row) {
       windows: c.chart?.windows,
     },
     savedWalletExposure: c.savedWalletExposure,
+    smartWalletSignal: c.smartWalletSignal,
     twitterNarrative: c.twitterNarrative,
+    socialCheck: c.socialCheck,
     filters: c.filters,
   };
 }
@@ -81,16 +84,63 @@ export async function decideCandidateBatch(rows, triggerCandidateId) {
   }
 
   const system = [
-    'You are Charon, a Solana meme coin trench analyst.',
+    'You are Charon - Solana lowcap trench AI.',
+    'Task: screen token candidates and DECIDE to buy or not.',
     'Return strict JSON only.',
-    'You will receive up to 10 recently matched candidates.',
-    'Pick at most one candidate to buy through the configured execution mode.',
-    'Use verdict BUY only for the single best unusually strong asymmetric opportunity.',
-    'Use WATCH if candidates are interesting but none deserves a buy.',
-    'Use PASS if the set is weak or unsafe.',
-    'Chart data is ATH/range context. Do not penalize or reward a token only because 24h change is huge; new Pump tokens often do that.',
-    'Use distance from ATH/range high and top-blast risk to decide whether entry is late.',
-    'Confidence is your conviction from 0 to 100, not probability.',
+    '',
+    'DECISION STRUCTURE:',
+    'Confidence score 0-100. Thresholds:',
+    '- Confidence >= 75 -> BUY',
+    '- 40-74 -> WATCH',
+    '- <40 -> PASS',
+    '',
+    'CONFIDENCE COMPONENTS:',
+    '',
+    '1. FEE ANALYSIS (weight 35%)',
+    '   - Fee claim >= 2 SOL -> +15',
+    '   - Fee distributed to >= 5 unique recipients -> +10 (organic)',
+    '   - Fee consistent in last 30 min -> +10',
+    '   - Fee only to 1-2 addresses -> -20 (FAKE, likely rug)',
+    '   - Fee/TVL ratio > 0.5 -> +10',
+    '',
+    '2. LOW CAP POSITIONING (weight 25%)',
+    '   - Market cap $10k-$50k -> +15 (sweet spot)',
+    '   - Market cap $50k-$150k -> +5 (ok, less upside)',
+    '   - Market cap > $200k -> -10 (too big for trench)',
+    '   - Holders 300-2000 -> +10 (organic)',
+    '   - Top 20 holder < 40% -> +10',
+    '   - Top 20 holder > 50% -> REJECT',
+    '',
+    '3. SMART WALLET TRACKING (weight 20%) - BOOST ONLY, NOT A GATE',
+    '   - 0 smart wallets in token -> 0 (neutral, do not reject)',
+    '   - 1 smart wallet entered -> +10 (early signal)',
+    '   - 2+ smart wallets entered separately -> +20 (strong confirmation)',
+    '   - Smart wallet bought while token down >= 20% from ATH -> +15 extra (dip buy pattern)',
+    '   NOTE: No smart wallet present is NOT a rejection reason. Only a boost.',
+    '',
+    '4. DIP & TIMING (weight 20%)',
+    '   - Token down 25-50% from ATH -> +15 (dip buy moment)',
+    '   - Token just pumped (0-10% from ATH) -> -10 (FOMO risk)',
+    '   - Token age 30 min - 6 hours -> +10 (still fresh)',
+    '   - Token age > 12 hours without recovery -> -10 (dead)',
+    '',
+    '5. REJECT CONDITIONS (no hesitation, PASS immediately)',
+    '   - Bundler rate > 20%',
+    '   - Wash trading flag from GMGN/Jupiter',
+    '   - Top 20 holder > 50%',
+    '   - Dev still holds > 10% supply',
+    '   - Fee claim only to 1-2 addresses (fake distribution)',
+    '   - Volume dropped > 80% from peak in 30 min',
+    '',
+    'OUTPUT MUST BE VALID JSON ONLY with format:',
+    '{',
+    '  "verdict": "BUY|WATCH|PASS",',
+    '  "confidence": <0-100>,',
+    '  "reason": "short reason",',
+    '  "risks": ["risk1", "risk2"],',
+    '  "suggested_tp_percent": 150,',
+    '  "suggested_sl_percent": -40',
+    '}',
   ].join(' ');
   const user = {
     task: 'Pick the best dry-run buy candidate from this recent batch, or choose none.',
@@ -126,7 +176,11 @@ export async function decideCandidateBatch(rows, triggerCandidateId) {
     const decision = normalizeDecision(parsed);
     const selectedId = Number(parsed.selected_candidate_id);
     const selectedMint = String(parsed.selected_mint || '');
-    const row = rows.find(item => item.id === selectedId || item.candidate.token?.mint === selectedMint);
+    let row = rows.find(item => item.id === selectedId || item.candidate.token?.mint === selectedMint);
+    if (!row && decision.verdict === 'BUY') {
+      row = rows.find(item => item.id === Number(triggerCandidateId))
+        || (rows.length === 1 ? rows[0] : null);
+    }
     return {
       ...decision,
       selected_candidate_id: decision.verdict === 'BUY' && row ? row.id : null,
