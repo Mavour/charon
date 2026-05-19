@@ -387,6 +387,33 @@ export function initDb() {
     llm_min_confidence: 0,
   }), ts);
 
+  // Auto-seed smart wallets so a fresh clone is ready after npm start.
+  const walletInsert = db.prepare('INSERT OR IGNORE INTO saved_wallets (label, address, created_at_ms) VALUES (?, ?, ?)');
+  const wallets = [
+    ['Cupsey', 'GJRs4FwHtemZ5ZE9x3FNvJ8TMwitKTh21yxdRPqn7npE'],
+    ['Solana whale', 'BCagckXeMChUKrHEfehxdbVkBytNUS3XpTtHpkAjH7Yv'],
+    ['Top trader A', '5B52w1ZW9tuwUduueP5J7HXz5AcGfruGoX6YoAudvyxG'],
+    ['Top trader B', 'DfMxre4cKmvogbLrPigxmibVTTQDuzjdXojWzjCXXhzj'],
+    ['Top trader C', '7iWnBRRpBJRPZ9d5M4S8Lu7K6Y8ojLKJh6Nq8X8Xnoor'],
+    ['Top trader D', 'CyJj5ejJAUveDXnLduJbkvwjxcmWJNqCuUsHpDPLvkGJ'],
+    ['Pump.fun ace', '9yMwSPk9mrXSN7yDHUuZurAh1sjbJsfpUqjZ7SvVtdco'],
+    ['Memecoin sniper', 'F2SuErm4MviWJ2HzKXk2nuzBC6xe883CFWUDCPz6cRWg'],
+    ['High-PnL wallet', '2YJbcB9G8wePrpVBcT31o8JEed6L3abgyCjt5qkJMymV'],
+    ['Top performer', 'suqh5sHtr8HyJ7q8scBimULPkPpA557prMG47xCHQfK'],
+    ['Active swing', 'DyHWFD2yyZdJTToKBRTX4MEfsQp8gdFFPvkbWNwpc4Vc'],
+    ['Memecoin trader', 'AJ6MGExeUKzCZNyh1tAhbjqYcF4M8r7J7vbYqB4dG2zN'],
+    ['Whale 2', 'BoyWh2eUC3M5qWqKaURhLE4fvYHJZUUjz4aWZbEGhe3D'],
+    ['Smart accumulator', 'Cn2k6CbE4G7cYrW1eXSNT87bPECdKYgAEpYHzxQfPS3y'],
+    ['Active sniper', 'GgsqU2N6hg5J4mTGgD37s7d2DQqbRBDhEpa7qKeNkPdc'],
+    ['Day trader', '6TY44PA4qfFM8gvLWX8gC3qDfAXEMSiGmU8DgAewyEYU'],
+    ['Liquidity hunter', 'ETf7p9MQNsxN4KwZBaZ2kyCfCXvKXp7kWxHf5BzRMd5g'],
+    ['DEX maker', '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1'],
+    ['Insider follower', '7BgBvyjrZX1YKz4oh9mjb8ZScatkkwb8DzFx7LoiVkM3'],
+    ['Volume top', '8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTSr'],
+  ];
+  for (const [label, address] of wallets) walletInsert.run(label, address, ts);
+  console.log(`[db] seeded ${wallets.length} smart wallets`);
+
 }
 
 export function ensureColumn(table, column, ddl) {
