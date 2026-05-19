@@ -210,8 +210,7 @@ export function initDb() {
   ensureColumn('decision_logs', 'strategy_id', 'TEXT');
 
   // Clear stale settings on every start, then re-seed.
-  db.exec('DELETE FROM settings');
-  const insert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+  const insert = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
   const sett = {
     agent_enabled: 'true',
     trading_mode: process.env.TRADING_MODE || 'dry_run',
