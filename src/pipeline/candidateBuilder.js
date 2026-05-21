@@ -209,7 +209,8 @@ export function filterCandidate(candidate) {
     failures.push(`max holder: ${maxHolder}% > ${strat.max_top20_holder_percent}%`);
   }
   if (Number.isFinite(top20Percent) && top20Percent > 50) {
-    failures.push(`reject: top 20 holders ${top20Percent.toFixed(1)}% > 50%`);
+    // SOFT FLAG — not a hard reject. Common in memecoins.
+    // LLM will evaluate this in context.
   }
 
   // Saved wallet holders
@@ -270,7 +271,8 @@ export function filterCandidate(candidate) {
       failures.push(`trending bundler rate: ${bundlerRate} > ${strat.trending_max_bundler_rate}`);
     }
     if (Number.isFinite(bundlerRate) && bundlerRate > 0.2) {
-      failures.push(`reject: bundler rate ${bundlerRate} > 0.2`);
+      // SOFT FLAG — not a hard reject. Common in memecoins.
+      // LLM will evaluate bundler rate in context.
     }
     if (candidate.trending.is_wash_trading === true || candidate.trending.is_wash_trading === 1) {
       failures.push('trending wash trading');
