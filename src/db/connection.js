@@ -220,9 +220,9 @@ export function initDb() {
     max_open_positions: process.env.MAX_OPEN_POSITIONS || '3',
     dry_run_buy_sol: '0.3',
     default_tp_percent: '150',
-    default_sl_percent: '-40',
+    default_sl_percent: '-25',
     default_trailing_enabled: 'true',
-    default_trailing_percent: '35',
+    default_trailing_percent: '20',
     min_fee_claim_sol: process.env.MIN_FEE_CLAIM_SOL || '2',
     min_mcap_usd: '10000',
     max_mcap_usd: '150000',
@@ -250,8 +250,8 @@ export function initDb() {
   const stratInsert = db.prepare('INSERT INTO strategies (id, name, enabled, config_json, created_at_ms) VALUES (?, ?, ?, ?, ?)');
   const ts = Date.now();
 
-  // SNIPER — more lenient defaults
-  // Fee-claim optional. LLM screening. Wide net, smart decision.
+  // SNIPER — FIXED: tighter SL, earlier trailing, earlier partial TP
+  // Entry filter loose (biar dapet candidate), risk management tight
   stratInsert.run('sniper', 'Sniper', 1, JSON.stringify({
     entry_mode: 'immediate',
     min_source_count: 1,
@@ -273,11 +273,11 @@ export function initDb() {
     position_size_sol: 0.15,
     max_open_positions: 3,
     tp_percent: 150,
-    sl_percent: -40,
+    sl_percent: -25,
     trailing_enabled: true,
-    trailing_percent: 35,
+    trailing_percent: 20,
     partial_tp: true,
-    partial_tp_at_percent: 100,
+    partial_tp_at_percent: 50,
     partial_tp_sell_percent: 40,
     max_hold_ms: 7200000,
     use_llm: true,
