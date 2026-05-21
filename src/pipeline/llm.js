@@ -189,8 +189,8 @@ export async function decideCandidateBatch(rows, triggerCandidateId) {
     '  "confidence": <0-100>,',
     '  "reason": "short reason",',
     '  "risks": ["risk1", "risk2"],',
-    '  "suggested_tp_percent": 150,',
-    '  "suggested_sl_percent": -25',
+    '  "suggested_tp_percent": 200,',
+    '  "suggested_sl_percent": -15',
     '}',
   ].join(' ');
   const user = {

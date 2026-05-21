@@ -160,42 +160,58 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     exitReason = 'VOLUME_DROP';
   }
 
-  // Partial TP check
+  // Partial TP: close position, keep 10% tokens in wallet
   if (!exitReason && strat?.partial_tp && !position.partial_tp_done && pnlPercent >= strat.partial_tp_at_percent) {
     const partialSellPercent = Math.max(0, Math.min(100, Number(strat.partial_tp_sell_percent || 0)));
     const sellSizeSol = Number(position.size_sol) * (partialSellPercent / 100);
-    const remainingSizeSol = Math.max(0, Number(position.size_sol) - sellSizeSol);
     if (partialSellPercent <= 0 || sellSizeSol <= 0) {
       console.log(`[position] ${position.id} partial TP skipped: invalid sell percent ${partialSellPercent}`);
     } else {
       db.prepare('UPDATE dry_run_positions SET partial_tp_done = 1 WHERE id = ?').run(position.id);
-      console.log(`[position] ${position.id} partial TP at ${pnlPercent.toFixed(1)}% (${partialSellPercent}% sell)`);
+      console.log(`[position] ${position.id} PARTIAL_TP_PROFIT at ${pnlPercent.toFixed(1)}% (${partialSellPercent}% sell, ${100 - partialSellPercent}% free in wallet)`);
       if (position.execution_mode === 'live' && position.token_amount_raw) {
         try {
           const sellAmount = Math.floor(Number(position.token_amount_raw) * (partialSellPercent / 100));
           if (sellAmount > 0) {
-            const sell = await executeLiveSell({ ...position, token_amount_raw: String(sellAmount) }, 'PARTIAL_TP');
-            const remaining = Number(position.token_amount_raw) - sellAmount;
-            db.prepare('UPDATE dry_run_positions SET token_amount_raw = ?, size_sol = ? WHERE id = ?').run(String(remaining), remainingSizeSol, position.id);
+            const sell = await executeLiveSell({ ...position, token_amount_raw: String(sellAmount) }, 'PARTIAL_TP_PROFIT');
+            const receivedLamports = Number(sell.outputAmount || 0);
+            const receivedSol = receivedLamports > 0 ? receivedLamports / 1_000_000_000 : null;
+            const pnlSold = receivedSol != null ? receivedSol - sellSizeSol : pnlSol;
+            const pnlSoldPct = receivedSol != null ? (receivedSol / sellSizeSol - 1) * 100 : pnlPercent;
+            db.prepare(`
+              UPDATE dry_run_positions
+              SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?,
+                  exit_reason = 'PARTIAL_TP_PROFIT', pnl_percent = ?, pnl_sol = ?, exit_signature = ?
+              WHERE id = ?
+            `).run(now(), price, mcap, pnlSoldPct, pnlSold, sell.signature, position.id);
             db.prepare(`
               INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
-              VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, 'PARTIAL_TP', ?)
+              VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, 'PARTIAL_TP_PROFIT', ?)
             `).run(position.id, position.mint, now(), price, mcap,
               sellSizeSol, sellAmount,
-              json({ pnlPercent, sell, partialSellPercent, remaining, remainingSizeSol }));
-            console.log(`[position] ${position.id} partial TP sold ${sellAmount} tokens, ${remaining} remaining`);
+              json({ pnlPercent, sell, partialSellPercent }));
+            console.log(`[position] ${position.id} PARTIAL_TP_PROFIT: sold ${sellAmount}, ${100 - partialSellPercent}% free in wallet`);
+            return { ...position, status: 'closed', closed_at_ms: now(), exit_reason: 'PARTIAL_TP_PROFIT', exit_price: price, exit_mcap: mcap, pnl_percent: pnlSoldPct, pnl_sol: pnlSold, exit_signature: sell.signature };
           }
         } catch (err) {
           console.log(`[position] ${position.id} partial sell failed: ${err.message}`);
         }
       } else {
+        // Dry run: close position, mark profit as secured
         const sellTokenEstimate = Number(position.token_amount_est || 0) * (partialSellPercent / 100) || null;
-        db.prepare('UPDATE dry_run_positions SET size_sol = ? WHERE id = ?').run(remainingSizeSol, position.id);
+        db.prepare(`
+          UPDATE dry_run_positions
+          SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?,
+              exit_reason = 'PARTIAL_TP_PROFIT', pnl_percent = ?, pnl_sol = ?
+          WHERE id = ?
+        `).run(now(), price, mcap, pnlPercent, pnlSol, position.id);
         db.prepare(`
           INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
-          VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, 'PARTIAL_TP', ?)
+          VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, 'PARTIAL_TP_PROFIT', ?)
         `).run(position.id, position.mint, now(), price, mcap, sellSizeSol, sellTokenEstimate,
-          json({ pnlPercent, pnlSol: sellSizeSol * pnlPercent / 100, partialSellPercent, remainingSizeSol }));
+          json({ pnlPercent, pnlSol: sellSizeSol * pnlPercent / 100, partialSellPercent }));
+        console.log(`[position] ${position.id} PARTIAL_TP_PROFIT (dry): 90% sold, 10% free`);
+        return { ...position, status: 'closed', closed_at_ms: now(), exit_reason: 'PARTIAL_TP_PROFIT', exit_price: price, exit_mcap: mcap, pnl_percent: pnlPercent, pnl_sol: pnlSol };
       }
     }
   }
