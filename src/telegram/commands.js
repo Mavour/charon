@@ -81,6 +81,7 @@ export async function handleMessage(msg) {
     return runLearning(chatId, windowArg);
   }
   if (text.startsWith('/lessons')) return sendLessons(chatId);
+  if (text.startsWith('/history') || text.startsWith('/hist')) return sendHistory(chatId);
   if (text.startsWith('/candidate')) {
     const mint = text.split(/\s+/)[1];
     if (!mint) return bot.sendMessage(chatId, 'Usage: /candidate <mint>');
@@ -289,6 +290,56 @@ async function sendPnl(chatId, query = null) {
   }
   const text = `📊 <b>PnL</b>\n\n${chunks.join('\n\n')}`;
   return query ? editMenuMessage(query, text, navKeyboard()) : bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
+}
+
+async function sendHistory(chatId) {
+  const closed = db.prepare(`
+    SELECT id, mint, symbol, status, entry_mcap, exit_mcap, exit_reason,
+           pnl_percent, pnl_sol, size_sol, strategy_id, closed_at_ms
+    FROM dry_run_positions
+    WHERE status = 'closed'
+    ORDER BY id DESC
+    LIMIT 20
+  `).all();
+  const open = db.prepare(`
+    SELECT id, mint, symbol, status, entry_mcap, high_water_mcap,
+           pnl_percent, size_sol, strategy_id
+    FROM dry_run_positions
+    WHERE status = 'open'
+    ORDER BY id DESC
+  `).all();
+
+  let totalPnlSol = 0;
+  let wins = 0, losses = 0;
+  const closedLines = closed.map(pos => {
+    const pnl = Number(pos.pnl_percent || 0);
+    totalPnlSol += Number(pos.pnl_sol || 0);
+    if (pnl > 0) wins++; else losses++;
+    const icon = pnl > 0 ? '🟢' : pnl === 0 ? '⚪' : '🔴';
+    const reasonIcon = pos.exit_reason === 'TP' ? '💰' : pos.exit_reason === 'TRAILING_TP' ? '🏁' : pos.exit_reason === 'SL' ? '💀' : pos.exit_reason === 'MAX_HOLD' ? '⏰' : '❌';
+    return `${icon} #${pos.id} ${escapeHtml(pos.symbol || short(pos.mint))} ${reasonIcon} ${fmtPct(pnl)}`;
+  });
+
+  const openLines = open.map(pos => {
+    const pnl = Number(pos.pnl_percent || 0);
+    const icon = pnl > 0 ? '🟢' : pnl === 0 ? '⚪' : '🔴';
+    return `${icon} #${pos.id} ${escapeHtml(pos.symbol || short(pos.mint))} ${fmtPct(pnl)} (open)`;
+  });
+
+  const totalIcon = totalPnlSol >= 0 ? '📈' : '📉';
+  const lines = [
+    '📜 <b>Trade History</b>',
+    '',
+    closedLines.length ? closedLines.join('\n') : 'Belum ada closed posisi.',
+    '',
+    `━━━━━━━━━━━━`,
+    `${totalIcon} <b>Summary</b>`,
+    `Closed: ${closed.length} (${wins}W / ${losses}L) · Win rate: ${closed.length > 0 ? ((wins/closed.length)*100).toFixed(0) : 0}%`,
+    `PnL: ${totalIcon} ${fmtPct(totalPnlSol > 0 ? (totalPnlSol/(open.length+closed.length)*100) : 0)} · ${fmtSol(Math.abs(totalPnlSol))} SOL ${totalPnlSol >= 0 ? 'profit' : 'loss'}`,
+    open.length > 0 ? `\n📌 <b>Open Positions (${open.length})</b>\n${openLines.join('\n')}` : null,
+  ].filter(Boolean).join('\n');
+
+  return bot.sendMessage(chatId, lines, { parse_mode: 'HTML', disable_web_page_preview: true });
 }
 
 function parseSetFilter(text) {
