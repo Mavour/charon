@@ -6,6 +6,9 @@ import { fetchGmgnTokenInfo } from '../enrichment/gmgn.js';
 import { fetchJupiterAsset, fetchJupiterHolders, fetchJupiterChartContext, fetchJupiterWalletPnl } from '../enrichment/jupiter.js';
 import { liveWalletPubkey } from '../liveExecutor.js';
 import { fetchSavedWalletExposure } from '../enrichment/wallets.js';
+import { fetchRugcheckReport, isRugcheckSafe, extractSecurityFromRugcheck } from '../enrichment/rugcheck.js';
+import { runTokenSecurityCheck } from '../enrichment/security.js';
+import { fetchDevWalletForToken, analyzeDevWallet } from '../enrichment/devWallet.js';
 import { filterCandidate } from '../pipeline/candidateBuilder.js';
 import { openPositions } from '../db/positions.js';
 import { updateCandidateSnapshot } from '../db/candidates.js';
@@ -39,6 +42,19 @@ export async function refreshCandidateForExecution(row) {
   const selectedSavedWalletExposure = selectedHolders
     ? await fetchSavedWalletExposure(mint, selectedHolders)
     : candidate.savedWalletExposure;
+
+  // Phase 1: Re-check security on execution
+  const [rugcheckReport, tokenSecurity, devWalletAddress] = await Promise.all([
+    fetchRugcheckReport(mint).catch(() => null),
+    runTokenSecurityCheck(mint).catch(() => ({ passed: true, failures: [] })),
+    fetchDevWalletForToken(mint).catch(() => null),
+  ]);
+  const rugcheckInfo = extractSecurityFromRugcheck(rugcheckReport);
+  const rugcheckStatus = isRugcheckSafe(rugcheckReport);
+  const devAnalysis = devWalletAddress
+    ? await analyzeDevWallet(devWalletAddress, mint).catch(() => ({ score: 0, verdict: 'neutral' }))
+    : { score: 0, verdict: 'neutral' };
+
   const priceUsd = firstPositiveNumber(tokenPriceFromGmgn(gmgn), asset?.usdPrice, selectedTrending?.price, candidate.metrics?.priceUsd);
   const marketCapUsd = firstPositiveNumber(
     marketCapFromGmgn(gmgn),
@@ -84,6 +100,13 @@ export async function refreshCandidateForExecution(row) {
       priceUsd,
       liquidityUsd: Number(gmgn?.liquidity ?? asset?.liquidity ?? selectedTrending?.liquidity ?? 0),
       holdersRefreshed: Boolean(holders?.holders?.length),
+    },
+    security: {
+      rugcheck: rugcheckInfo,
+      rugcheckSafe: rugcheckStatus,
+      tokenTax: tokenSecurity,
+      devWallet: devWalletAddress,
+      devAnalysis,
     },
   };
   refreshed.filters = filterCandidate(refreshed);

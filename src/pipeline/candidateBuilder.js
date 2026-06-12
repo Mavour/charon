@@ -1,9 +1,14 @@
-import { now, firstPositiveNumber, marketCapFromGmgn, tokenPriceFromGmgn, lamToSol } from '../utils.js';
+import { now, firstPositiveNumber, marketCapFromGmgn, tokenPriceFromGmgn, lamToSol, withTimeout } from '../utils.js';
 import { activeStrategy } from '../db/settings.js';
 import { fetchGmgnTokenInfo } from '../enrichment/gmgn.js';
 import { fetchJupiterAsset, fetchJupiterHolders, fetchJupiterChartContext } from '../enrichment/jupiter.js';
 import { fetchSavedWalletExposure } from '../enrichment/wallets.js';
 import { fetchTwitterNarrative } from '../enrichment/twitter.js';
+import { fetchRugcheckReport, isRugcheckSafe, extractSecurityFromRugcheck } from '../enrichment/rugcheck.js';
+import { runTokenSecurityCheck } from '../enrichment/security.js';
+import { fetchDevWalletForToken, analyzeDevWallet } from '../enrichment/devWallet.js';
+import { analyzeTokenMomentum, quickMomentumFilter } from '../enrichment/momentum.js';
+import { calculateBundleScore, bundleFilterResult } from '../enrichment/bundleDetector.js';
 import { gmgnLink } from '../format.js';
 import { db } from '../db/connection.js';
 import { safeJson } from '../utils.js';
@@ -279,6 +284,78 @@ export function filterCandidate(candidate) {
     }
   }
 
+  // Phase 1: RUG DEFENSE HARD FILTERS
+  const sec = candidate.security;
+  // 1. RugCheck safety score
+  const rugMaxScore = Number(strat.rugcheck_max_score ?? 250);
+  const rugScore = sec?.rugcheck?.score ?? (sec?.rugcheckSafe?.score ?? null);
+  if (Number.isFinite(rugScore) && rugScore > rugMaxScore) {
+    failures.push(`rugcheck_score: ${rugScore} > max ${rugMaxScore}`);
+  }
+  if (sec?.rugcheckSafe?.safe === false) {
+    failures.push(`rugcheck_unsafe: ${sec.rugcheckSafe.reason}`);
+  }
+  // 2. Mint & freeze authority (mutable = dev can change token)
+  const requireMintRevoked = strat.require_mint_revoked !== false; // default true
+  const requireFreezeRevoked = strat.require_freeze_revoked !== false; // default true
+  if (requireMintRevoked && sec?.rugcheck?.mintAuthority) {
+    failures.push('mint_authority: active (dev can mint more)');
+  }
+  if (requireFreezeRevoked && sec?.rugcheck?.freezeAuthority) {
+    failures.push('freeze_authority: active (dev can freeze wallets)');
+  }
+  // 3. LP safety — hard reject for dip_buy/smart_money, soft for sniper
+  const requireLpLockedOrBurned = strat.require_lp_safe !== false;
+  const isSniperLike = strat.id === 'sniper' || strat.id === 'degen';
+  if (requireLpLockedOrBurned && sec?.rugcheck) {
+    const { hasBurnedLp, hasLockedLp } = sec.rugcheck;
+    if (!hasBurnedLp && !hasLockedLp) {
+      if (isSniperLike) {
+        // Soft flag: sniper tolerance for fresh tokens that haven't burned LP yet
+        // Don't hard reject — let LLM penalize in scoring
+      } else {
+        failures.push('lp_unsafe: neither burned nor locked');
+      }
+    }
+  }
+  // 4. Tax check
+  const maxTax = Number(strat.max_total_tax_percent ?? 15);
+  const buyTax = sec?.tokenTax?.buyTaxPercent ?? 0;
+  const sellTax = sec?.tokenTax?.sellTaxPercent ?? 0;
+  const totalTax = buyTax + sellTax;
+  if (totalTax > maxTax) {
+    failures.push(`tax_too_high: ${totalTax.toFixed(1)}% > ${maxTax}%`);
+  }
+  if (sec?.tokenTax?.hasHiddenTax) {
+    failures.push('hidden_tax_detected');
+  }
+  // Honeypot detection
+  if (sec?.tokenTax?.canSell === false) {
+    failures.push('honeypot: cannot sell');
+  }
+  // 5. Dev wallet analysis
+  const maxDevScore = Number(strat.max_dev_rug_score ?? 70);
+  const devScore = sec?.devAnalysis?.score ?? 0;
+  if (Number.isFinite(devScore) && devScore > maxDevScore) {
+    failures.push(`dev_history: rug_score ${devScore} > ${maxDevScore} (${sec?.devAnalysis?.verdict})`);
+  }
+
+  // Phase 2: Momentum filter
+  if (candidate.momentum) {
+    const momFilter = quickMomentumFilter(candidate.momentum, strat);
+    if (!momFilter.passed) {
+      failures.push(...momFilter.failures);
+    }
+  }
+
+  // Phase 3: Bundle detection
+  if (candidate.bundle) {
+    const bundleFilter = bundleFilterResult(candidate.bundle, strat);
+    if (!bundleFilter.passed) {
+      failures.push(...bundleFilter.failures);
+    }
+  }
+
   return { passed: failures.length === 0, failures, strategy: strat.id };
 }
 
@@ -290,6 +367,19 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
   const chart = await fetchJupiterChartContext(mint);
   const savedWalletExposure = await fetchSavedWalletExposure(mint, holders);
   const twitterNarrative = await fetchTwitterNarrative(graduatedCoin || jupiterAsset, gmgn);
+
+  // Phase 1: Rug Defense enrichments (concurrent with timeouts)
+  const [rugcheckReport, tokenSecurity, devWalletAddress] = await Promise.all([
+    withTimeout(fetchRugcheckReport(mint), 8_000, null).catch(() => null),
+    withTimeout(runTokenSecurityCheck(mint), 6_000, ({ passed: true, failures: [] })).catch(() => ({ passed: true, failures: [] })),
+    withTimeout(fetchDevWalletForToken(mint), 5_000, null).catch(() => null),
+  ]);
+  const rugcheckInfo = extractSecurityFromRugcheck(rugcheckReport);
+  const rugcheckStatus = isRugcheckSafe(rugcheckReport);
+  const devAnalysis = devWalletAddress
+    ? await withTimeout(analyzeDevWallet(devWalletAddress, mint), 10_000, ({ score: 0, verdict: 'neutral' })).catch(() => ({ score: 0, verdict: 'neutral' }))
+    : { score: 0, verdict: 'neutral' };
+
   const priceUsd = firstPositiveNumber(tokenPriceFromGmgn(gmgn), jupiterAsset?.usdPrice, trendingToken?.price);
   const marketCapUsd = firstPositiveNumber(
     marketCapFromGmgn(gmgn),
@@ -356,8 +446,29 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
     twitterNarrative,
     socialCheck: null,
     createdAtMs: now(),
+    // Phase 1: Rug Defense fields
+    security: {
+      rugcheck: rugcheckInfo,
+      rugcheckSafe: rugcheckStatus,
+      tokenTax: tokenSecurity,
+      devWallet: devWalletAddress,
+      devAnalysis,
+    },
   };
+
+  // Phase 2 & 3: Momentum & Bundle (with timeouts, skip for old tokens where irrelevant)
   candidate.socialCheck = buildSocialCheck(candidate.token, twitterNarrative);
+  const tokenAgeMin = Number(candidate.metrics?.tokenAgeMs || 0) / 60_000;
+  const [momentum, bundle] = await Promise.all([
+    withTimeout(analyzeTokenMomentum(mint, { gmgn, jupiterAsset }), 8_000, null).catch(() => null),
+    // Bundle detection is only relevant for fresh tokens (< 30 min)
+    tokenAgeMin < 30
+      ? withTimeout(calculateBundleScore(mint, trendingToken, holders), 10_000, null).catch(() => null)
+      : null,
+  ]);
+  candidate.momentum = momentum;
+  candidate.bundle = bundle ?? { score: 0, riskLevel: 'minimal', isBundled: false, isSniperHeavy: false, pattern: 'old_token_skipped' };
+
   candidate.filters = filterCandidate(candidate);
   return candidate;
 }
