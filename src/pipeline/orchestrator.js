@@ -41,6 +41,20 @@ export async function processCandidateFromSignals(signals) {
   const strat = activeStrategy();
   let rows, batchDecision, batchId;
 
+  // Budget pre-filter: skip LLM kalo kandidat gak worthy
+  const mcap = Number(candidate.metrics.marketCapUsd || 0);
+  const hasFee = Boolean(candidate.feeClaim);
+  const hasGrad = Boolean(candidate.graduation);
+  const hasTrending = Boolean(candidate.trending);
+  if (!hasFee && !hasGrad && !hasTrending) {
+    console.log(`[budget] skip LLM: ${candidate.token.mint.slice(0, 8)}... no fee/graduated/trending`);
+    return;
+  }
+  if (mcap < 10000 || mcap > 500000) {
+    console.log(`[budget] skip LLM: ${candidate.token.mint.slice(0, 8)}... mcap $${Math.round(mcap).toLocaleString()} out of range`);
+    return;
+  }
+
   if (!strat.use_llm) {
     const selfRow = candidateById(candidateId);
     rows = selfRow ? [selfRow] : [];

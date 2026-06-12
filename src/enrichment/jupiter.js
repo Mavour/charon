@@ -55,7 +55,7 @@ function normalizeJupiterTrendingRow(row, interval, rank) {
   };
 }
 
-async function fetchJupiterAsset(mint, { useCache = true, ttlMs = 20_000 } = {}) {
+async function fetchJupiterAsset(mint, { useCache = true, ttlMs = 60_000 } = {}) {
   const cached = jupiterAssetCache.get(mint);
   if (useCache && cached && now() - cached.at < ttlMs) return cached.data;
   if (jupiterAssetBackoffActive()) return cached?.data || null;
@@ -164,7 +164,7 @@ async function fetchJupiterChartWindow(mint, interval, candles, label) {
   url.searchParams.set('type', 'price');
   url.searchParams.set('quote', 'native');
   const res = await axios.get(url.toString(), {
-    timeout: 10_000,
+    timeout: 8_000,
     headers: JSON_HEADERS,
   });
   return summarizeCandles(label, Array.isArray(res.data?.candles) ? res.data.candles : []);

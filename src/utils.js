@@ -137,6 +137,18 @@ export function parseWindowMs(value = '12h') {
   return Math.max(5 * 60_000, Math.min(30 * 24 * 60 * 60_000, amount * multipliers[unit]));
 }
 
+export function withTimeout(promise, ms, fallback) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`timeout:${ms}ms`)), ms)),
+  ]).catch(err => {
+    if (String(err.message).startsWith('timeout:')) {
+      return fallback !== undefined ? fallback : null;
+    }
+    throw err;
+  });
+}
+
 export function formatWindow(ms) {
   if (ms % (24 * 60 * 60_000) === 0) return `${ms / (24 * 60 * 60_000)}d`;
   if (ms % (60 * 60_000) === 0) return `${ms / (60 * 60_000)}h`;

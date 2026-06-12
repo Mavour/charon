@@ -78,14 +78,14 @@ function defaultStrategy() {
   return {
     id: 'sniper', name: 'Sniper',
     entry_mode: 'immediate', min_source_count: 2, require_fee_claim: true,
-    token_age_max_ms: 3600000, min_mcap_usd: 7000, max_mcap_usd: 200000,
-    min_fee_claim_sol: 0.5, min_gmgn_total_fee_sol: 10, min_holders: 0,
-    max_top20_holder_percent: 100, min_saved_wallet_holders: 0, max_ath_distance_pct: 0,
-    min_graduated_volume_usd: 0, trending_min_volume_usd: 0, trending_min_swaps: 0,
-    trending_max_rug_ratio: 0.3, trending_max_bundler_rate: 0.5,
-    position_size_sol: 0.1, max_open_positions: 3,
-    tp_percent: 50, sl_percent: -25, trailing_enabled: true, trailing_percent: 20,
-    partial_tp: false, partial_tp_at_percent: 0, partial_tp_sell_percent: 0,
-    max_hold_ms: 0, use_llm: true, llm_min_confidence: 50,
+    token_age_max_ms: 21600000, min_mcap_usd: 10000, max_mcap_usd: 150000,
+    min_fee_claim_sol: 2.0, min_gmgn_total_fee_sol: 10, min_holders: 0,
+    max_top20_holder_percent: 45, min_saved_wallet_holders: 0, max_ath_distance_pct: 0,
+    min_graduated_volume_usd: 0, trending_min_volume_usd: 5000, trending_min_swaps: 50,
+    trending_max_rug_ratio: 0.15, trending_max_bundler_rate: 0.2,
+    position_size_sol: 0.3, max_open_positions: 3,
+    tp_percent: 150, sl_percent: -40, trailing_enabled: true, trailing_percent: 35,
+    partial_tp: true, partial_tp_at_percent: 100, partial_tp_sell_percent: 40,
+    max_hold_ms: 7200000, use_llm: true, llm_min_confidence: 75,
   };
 }
