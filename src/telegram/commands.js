@@ -1,7 +1,7 @@
 import { bot } from './bot.js';
 import { TELEGRAM_CHAT_ID } from '../config.js';
 import { now, json } from '../utils.js';
-import { escapeHtml, fmtPct } from '../format.js';
+import { escapeHtml, fmtPct, fmtSol, short } from '../format.js';
 import { db } from '../db/connection.js';
 import { numSetting, boolSetting, setSetting, activeStrategy, setActiveStrategy, strategyById, updateStrategyConfig } from '../db/settings.js';
 import { candidateById, latestCandidateByMint, updateCandidateStatus } from '../db/candidates.js';
@@ -81,6 +81,7 @@ export async function handleMessage(msg) {
     return runLearning(chatId, windowArg);
   }
   if (text.startsWith('/lessons')) return sendLessons(chatId);
+  if (text.startsWith('/history') || text.startsWith('/hist')) return sendHistory(chatId);
   if (text.startsWith('/candidate')) {
     const mint = text.split(/\s+/)[1];
     if (!mint) return bot.sendMessage(chatId, 'Usage: /candidate <mint>');
@@ -247,6 +248,7 @@ export function setupTelegram() {
     { command: 'pnl', description: 'Show saved-wallet PnL' },
     { command: 'learn', description: 'Run manual learning report' },
     { command: 'lessons', description: 'Show active screening lessons' },
+    { command: 'history', description: 'Show closed trade history' },
     { command: 'setfilter', description: 'Set a filter value' },
     { command: 'walletadd', description: 'Save wallet for exposure/PnL' },
     { command: 'walletremove', description: 'Remove saved wallet' },
@@ -302,4 +304,54 @@ function allPositions(limit = 10) {
 
 function savedWallets() {
   return db.prepare('SELECT * FROM saved_wallets ORDER BY label').all();
+}
+
+async function sendHistory(chatId) {
+  const closed = db.prepare(`
+    SELECT id, mint, symbol, status, entry_mcap, exit_mcap, exit_reason,
+           pnl_percent, pnl_sol, size_sol, strategy_id, closed_at_ms
+    FROM dry_run_positions
+    WHERE status = 'closed'
+    ORDER BY id DESC
+    LIMIT 20
+  `).all();
+  const open = db.prepare(`
+    SELECT id, mint, symbol, status, entry_mcap, high_water_mcap,
+           pnl_percent, size_sol, strategy_id
+    FROM dry_run_positions
+    WHERE status = 'open'
+    ORDER BY id DESC
+  `).all();
+
+  let totalPnlSol = 0;
+  let wins = 0, losses = 0;
+  const closedLines = closed.map(pos => {
+    const pnl = Number(pos.pnl_percent || 0);
+    totalPnlSol += Number(pos.pnl_sol || 0);
+    if (pnl > 0) wins++; else losses++;
+    const icon = pnl > 0 ? '🟢' : pnl === 0 ? '⚪' : '🔴';
+    const reasonIcon = pos.exit_reason === 'TP' ? '💰' : pos.exit_reason === 'TRAILING_TP' ? '🏁' : pos.exit_reason === 'SL' ? '💀' : pos.exit_reason === 'MAX_HOLD' ? '⏰' : '❌';
+    return `${icon} #${pos.id} ${escapeHtml(pos.symbol || short(pos.mint))} ${reasonIcon} ${fmtPct(pnl)}`;
+  });
+
+  const openLines = open.map(pos => {
+    const pnl = Number(pos.pnl_percent || 0);
+    const icon = pnl > 0 ? '🟢' : pnl === 0 ? '⚪' : '🔴';
+    return `${icon} #${pos.id} ${escapeHtml(pos.symbol || short(pos.mint))} ${fmtPct(pnl)} (open)`;
+  });
+
+  const totalIcon = totalPnlSol >= 0 ? '📈' : '📉';
+  const lines = [
+    '📜 <b>Trade History</b>',
+    '',
+    closedLines.length ? closedLines.join('\n') : 'Belum ada closed posisi.',
+    '',
+    `━━━━━━━━━━━━`,
+    `${totalIcon} <b>Summary</b>`,
+    `Closed: ${closed.length} (${wins}W / ${losses}L) · Win rate: ${closed.length > 0 ? ((wins/closed.length)*100).toFixed(0) : 0}%`,
+    `PnL: ${totalIcon} ${fmtPct(totalPnlSol > 0 ? (totalPnlSol/(open.length+closed.length)*100) : 0)} · ${fmtSol(Math.abs(totalPnlSol))} SOL ${totalPnlSol >= 0 ? 'profit' : 'loss'}`,
+    open.length > 0 ? `\n📌 <b>Open Positions (${open.length})</b>\n${openLines.join('\n')}` : null,
+  ].filter(Boolean).join('\n');
+
+  return bot.sendMessage(chatId, lines, { parse_mode: 'HTML', disable_web_page_preview: true });
 }
