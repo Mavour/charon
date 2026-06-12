@@ -101,7 +101,7 @@ export async function processCandidateFromSignals(signals) {
 
   if (batchId) await sendBatchReveal(batchId, rows, batchDecision, candidateId);
 
-  if (selectedRow && boolSetting('agent_enabled', true) && batchDecision.verdict === 'BUY' && batchDecision.confidence >= numSetting('llm_min_confidence', 75)) {
+  if (selectedRow && boolSetting('agent_enabled', true) && batchDecision.verdict === 'BUY' && batchDecision.confidence >= numSetting('llm_min_confidence', 50)) {
     if (!canOpenMorePositions()) {
       const max = numSetting('max_open_positions', 3);
       console.log(`[agent] max open positions reached (${openPositionCount()}/${max}), skipping buy ${selectedRow.candidate.token.mint}`);
@@ -117,21 +117,53 @@ export async function processCandidateFromSignals(signals) {
       return;
     }
     await handleApprovedBuy(selectedRow, batchDecision, batchId, rows, candidateId);
-  } else {
-    logDecisionEvent({
-      batchId,
-      triggerCandidateId: candidateId,
-      selectedRow,
-      rows,
-      decision: batchDecision,
-      action: selectedRow ? 'entry_not_approved' : 'no_candidate_selected',
-      guardrails: {
-        agentEnabled: boolSetting('agent_enabled', true),
-        confidenceThreshold: numSetting('llm_min_confidence', 75),
-        openPositions: openPositionCount(),
-        maxOpenPositions: numSetting('max_open_positions', 3),
-      },
-    });
+    return;
+  }
+
+  // ── FALLBACK: if LLM doesn't BUY but we have a decent candidate, auto-buy the best one (dry-run learning mode)
+  const strat = activeStrategy();
+  const triggerRow = rows.find(r => r.id === candidateId);
+  const bestCandidate = triggerRow && triggerRow.candidate?.filters?.passed
+    ? triggerRow
+    : rows.sort((a, b) => Number(b.candidate.metrics?.marketCapUsd || 0) - Number(a.candidate.metrics?.marketCapUsd || 0))[0];
+
+  if (bestCandidate && bestCandidate.candidate?.filters?.passed && boolSetting('agent_enabled', true) && strat.use_llm !== false) {
+    const mcap = Number(bestCandidate.candidate.metrics?.marketCapUsd || 0);
+    const liq  = Number(bestCandidate.candidate.metrics?.liquidityUsd || 0);
+    const holders = Number(bestCandidate.candidate.metrics?.holderCount || 0);
+    const rugOk = !bestCandidate.candidate?.security?.rugcheck?.critical_risks;
+    // Simple fallback criteria: positive mcap, some liquidity, enough holders, no critical rug
+    if (mcap > 0 && liq > 500 && holders >= 50 && rugOk) {
+      console.log(`[fallback] auto-buying #${bestCandidate.id} ${bestCandidate.candidate.token?.symbol} (mcap=$${Math.round(mcap)}, liq=$${Math.round(liq)}, holders=${Math.round(holders)})`);
+      const fallbackDecision = {
+        ...batchDecision,
+        verdict: 'BUY',
+        confidence: 35,
+        reason: `Fallback BUY: LLM chose ${batchDecision.verdict}, but candidate passes basic criteria (mcap $${Math.round(mcap)}, liq $${Math.round(liq)}, holders ${Math.round(holders)}).`,
+        selected_candidate_id: bestCandidate.id,
+        selected_row: bestCandidate,
+      };
+      if (canOpenMorePositions()) {
+        await handleApprovedBuy(bestCandidate, fallbackDecision, batchId, rows, candidateId);
+        return;
+      }
+    }
+  }
+
+  logDecisionEvent({
+    batchId,
+    triggerCandidateId: candidateId,
+    selectedRow,
+    rows,
+    decision: batchDecision,
+    action: selectedRow ? 'entry_not_approved' : 'no_candidate_selected',
+    guardrails: {
+      agentEnabled: boolSetting('agent_enabled', true),
+      confidenceThreshold: numSetting('llm_min_confidence', 50),
+      openPositions: openPositionCount(),
+      maxOpenPositions: numSetting('max_open_positions', 3),
+    },
+  });
   }
 }
 
