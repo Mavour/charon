@@ -256,24 +256,25 @@ export function initDb() {
   const stratInsert = db.prepare('INSERT INTO strategies (id, name, enabled, config_json, created_at_ms) VALUES (?, ?, ?, ?, ?)');
   const ts = Date.now();
 
-  // SNIPER — FIXED: tighter SL, earlier trailing, earlier partial TP
-  // Entry filter loose (biar dapet candidate), risk management tight
+  // SNIPER — RELAXED: allow old tokens, high mcap, low swaps, high holder concentration.
+  // Goal: increase candidate pass-through so LLM or rule-based can actually trade.
+  // Risk management remains tight (SL -18%, trailing 12%, partial TP at +25%).
   stratInsert.run('sniper', 'Sniper', 1, JSON.stringify({
     entry_mode: 'immediate',
     min_source_count: 1,
     require_fee_claim: false,
-    token_age_max_ms: 43200000,
-    min_mcap_usd: 7000,
-    max_mcap_usd: 50000,
+    token_age_max_ms: 0,
+    min_mcap_usd: 5000,
+    max_mcap_usd: 0,
     min_fee_claim_sol: 0,
-    min_gmgn_total_fee_sol: 1,
+    min_gmgn_total_fee_sol: 0,
     min_holders: 0,
-    max_top20_holder_percent: 80,
+    max_top20_holder_percent: 95,
     min_saved_wallet_holders: 0,
     max_ath_distance_pct: 0,
     min_graduated_volume_usd: 0,
     trending_min_volume_usd: 500,
-    trending_min_swaps: 5,
+    trending_min_swaps: 0,
     trending_max_rug_ratio: 0.3,
     trending_max_bundler_rate: 0.35,
     rugcheck_max_score: 200,
@@ -294,7 +295,7 @@ export function initDb() {
     volume_drop_exit_percent: 70,
     max_hold_ms: 7200000,
     use_llm: true,
-    llm_min_confidence: 70,
+    llm_min_confidence: 40,
   }), ts);
 
   // DIP BUY
