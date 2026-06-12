@@ -245,18 +245,18 @@ export function initDb() {
   for (const [key, value] of Object.entries(defaults)) insert.run(key, value);
 
   // Seed default strategies
-  const stratInsert = db.prepare('INSERT OR IGNORE INTO strategies (id, name, enabled, config_json, created_at_ms) VALUES (?, ?, ?, ?, ?)');
+  const stratInsert = db.prepare('INSERT OR REPLACE INTO strategies (id, name, enabled, config_json, created_at_ms) VALUES (?, ?, ?, ?, ?)');
   const ts = Date.now();
 
   stratInsert.run('sniper', 'Sniper', 1, JSON.stringify({
     entry_mode: 'immediate',
-    min_source_count: 2,
-    require_fee_claim: true,
-    token_age_max_ms: 3600000,
-    min_mcap_usd: 7000,
-    max_mcap_usd: 200000,
-    min_fee_claim_sol: 0.5,
-    min_gmgn_total_fee_sol: 10,
+    min_source_count: 1,
+    require_fee_claim: false,
+    token_age_max_ms: 0,
+    min_mcap_usd: 1000,
+    max_mcap_usd: 0,
+    min_fee_claim_sol: 0,
+    min_gmgn_total_fee_sol: 0,
     min_holders: 0,
     max_top20_holder_percent: 100,
     min_saved_wallet_holders: 0,
@@ -277,7 +277,7 @@ export function initDb() {
     partial_tp_sell_percent: 0,
     max_hold_ms: 0,
     use_llm: true,
-    llm_min_confidence: 50,
+    llm_min_confidence: 30,
   }), ts);
 
   stratInsert.run('dip_buy', 'Dip Buy', 0, JSON.stringify({
